@@ -60,7 +60,7 @@ int main() {
     // サイン波テーブル生成
     for (int i = 0; i < TABLE_SIZE; i++) {
         sine_table[i] = (int16_t)(
-            32767 * sinf(2.0f * M_PI * i / TABLE_SIZE)
+            32767 * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.01
         );
     }
 
