@@ -9,6 +9,22 @@
 #define SAMPLES_PER_BUFFER 256
 #define PICO_AUDIO_PACK_MUTE_PIN 21
 
+// 500ms on / 500ms off
+#define NOTE_ON_SAMPLES  (SAMPLE_RATE / 2)   // 24000
+#define NOTE_OFF_SAMPLES (SAMPLE_RATE / 2)   // 24000
+
+#define SUSTAIN_SEC 0.5f
+
+#define ATTACK_TIME   (0.01f * SUSTAIN_SEC)
+#define RELEASE_TIME  (0.6f  * SUSTAIN_SEC)
+
+#define ATTACK_SAMPLES  ((uint32_t)(ATTACK_TIME  * SAMPLE_RATE))
+#define RELEASE_SAMPLES ((uint32_t)(RELEASE_TIME * SAMPLE_RATE))
+
+#define NOTE_TOTAL_SAMPLES (ATTACK_SAMPLES + RELEASE_SAMPLES)
+
+uint32_t note_sample_pos = 0;
+
 static int16_t sine_table[TABLE_SIZE];
 
 static struct audio_buffer_pool *init_audio(void) {
@@ -27,9 +43,6 @@ static struct audio_buffer_pool *init_audio(void) {
         audio_new_producer_pool(&producer_format, 3, SAMPLES_PER_BUFFER);
 
     struct audio_i2s_config config = {
-        // .data_pin = PICO_AUDIO_I2S_DATA_PIN,
-        // .clock_pin_base = PICO_AUDIO_I2S_CLOCK_PIN_BASE,
-        // https://toys.poppo-ya.com/1108/
         .data_pin = 9,
         .clock_pin_base = 10,
         .dma_channel = 0,
@@ -52,15 +65,15 @@ static struct audio_buffer_pool *init_audio(void) {
 int main() {
     stdio_init_all();
 
-    // ---- Pico Audio Pack: DAC mute解除 ----
+    // ---- DAC mute解除 ----
     gpio_init(PICO_AUDIO_PACK_MUTE_PIN);
     gpio_set_dir(PICO_AUDIO_PACK_MUTE_PIN, GPIO_OUT);
-    gpio_put(PICO_AUDIO_PACK_MUTE_PIN, 0); // LOW = unmute
+    gpio_put(PICO_AUDIO_PACK_MUTE_PIN, 0);
 
     // サイン波テーブル生成
     for (int i = 0; i < TABLE_SIZE; i++) {
         sine_table[i] = (int16_t)(
-            32767 * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.01
+            32767 * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.05
         );
     }
 
@@ -70,14 +83,57 @@ int main() {
     uint32_t phase_step =
         (uint32_t)((float)TABLE_SIZE * SINE_FREQ / SAMPLE_RATE * (1 << 16));
 
+    uint32_t gate_counter = 0;
+    bool note_on = true;
+
     while (true) {
         struct audio_buffer *buffer = take_audio_buffer(ap, true);
         int16_t *samples = (int16_t *)buffer->buffer->bytes;
 
         for (uint i = 0; i < buffer->max_sample_count; i++) {
-            samples[i] = sine_table[(phase >> 16) % TABLE_SIZE];
-            phase += phase_step;
+
+            float env = 0.0f;
+
+            if (note_on) {
+
+                if (note_sample_pos < ATTACK_SAMPLES) {
+                    // Attack
+                    float x = (float)note_sample_pos / ATTACK_SAMPLES;
+                    env = x * x; // curve ≈ -3
+                }
+                else if (note_sample_pos < NOTE_TOTAL_SAMPLES) {
+                    // Release
+                    float x = 1.0f -
+                        (float)(note_sample_pos - ATTACK_SAMPLES) / RELEASE_SAMPLES;
+                    env = x * x;
+                }
+                else {
+                    // ノート終了
+                    env = 0.0f;
+                    note_on = false;
+                    note_sample_pos = 0;
+                    gate_counter = 0;
+                }
+
+                int16_t s =
+                    sine_table[(phase >> 16) % TABLE_SIZE];
+                samples[i] = (int16_t)(s * env);
+
+                phase += phase_step;
+                note_sample_pos++;
+            }
+            else {
+                samples[i] = 0;
+                gate_counter++;
+
+                if (gate_counter >= NOTE_OFF_SAMPLES) {
+                    gate_counter = 0;
+                    note_on = true;
+                    note_sample_pos = 0;
+                }
+            }
         }
+
 
         buffer->sample_count = buffer->max_sample_count;
         give_audio_buffer(ap, buffer);
