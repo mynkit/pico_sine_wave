@@ -1,52 +1,135 @@
 #include <math.h>
+#include <stdlib.h>
 #include "hardware/gpio.h"
 #include "pico/stdlib.h"
 #include "pico/audio_i2s.h"
 
-// =====================
-// Audio settings
-// =====================
+// =====================================================
+// Audio basic settings
+// =====================================================
 #define SAMPLE_RATE 48000
 #define TABLE_SIZE  256
 #define SAMPLES_PER_BUFFER 256
 #define PICO_AUDIO_PACK_MUTE_PIN 21
 
-// =====================
-// Musical parameters
-// =====================
-#define BASE_FREQ     440.0f
-#define ACCELERATE    1.3f        // SC の accelerate
-#define SUSTAIN_SEC   0.5f        // SC の sustain
+// silence between notes
+#define NOTE_OFF_SEC 0.5f
+#define NOTE_OFF_SAMPLES ((uint32_t)(NOTE_OFF_SEC * SAMPLE_RATE))
 
-// 500ms on / 500ms off
-#define NOTE_ON_SAMPLES  (uint32_t)(SAMPLE_RATE * 0.5f)
-#define NOTE_OFF_SAMPLES (uint32_t)(SAMPLE_RATE * 0.5f)
+// =====================================================
+// Utility
+// =====================================================
+static inline float frand(void) {
+    return (float)rand() / (float)RAND_MAX;
+}
 
-// =====================
-// SC Env.linen(0.01, 0, 0.6) * sustain
-// =====================
-#define ATTACK_TIME    (0.01f * SUSTAIN_SEC)
-#define RELEASE_TIME   (0.6f  * SUSTAIN_SEC)
+static inline float mapf(
+    float v, float in_min, float in_max,
+    float out_min, float out_max
+) {
+    return (v - in_min) / (in_max - in_min)
+        * (out_max - out_min) + out_min;
+}
 
-#define ATTACK_SAMPLES   ((uint32_t)(ATTACK_TIME  * SAMPLE_RATE))
-#define RELEASE_SAMPLES  ((uint32_t)(RELEASE_TIME * SAMPLE_RATE))
-#define NOTE_TOTAL_SAMPLES (ATTACK_SAMPLES + RELEASE_SAMPLES)
+// =====================================================
+// Note structure (SC Synth 相当)
+// =====================================================
+typedef struct {
+    float amp;
+    float freq;
+    float sustain;
+    float accelerate;
 
-// SC: Line.kr(1, 1+accelerate, max(0.5, sustain))
-#define FREQ_RAMP_TIME \
-    ((SUSTAIN_SEC > 0.5f) ? SUSTAIN_SEC : 0.5f)
+    uint32_t attack_samples;
+    uint32_t release_samples;
+    uint32_t note_total_samples;
 
-#define FREQ_RAMP_SAMPLES ((uint32_t)(FREQ_RAMP_TIME * SAMPLE_RATE))
+    uint32_t freq_ramp_samples;
 
-// =====================
-// Globals
-// =====================
+    uint32_t phase_step_start;
+    uint32_t phase_step_end;
+} SineNote;
+
+// =====================================================
 static int16_t sine_table[TABLE_SIZE];
-static uint32_t note_sample_pos = 0;
 
-// =====================
+static SineNote current_note;
+static uint32_t note_sample_pos = 0;
+static uint32_t gate_counter = 0;
+static bool note_on = false;
+static uint32_t phase = 0;
+
+// =====================================================
+// Random parameter generator (TS/C++ 移植)
+// =====================================================
+static SineNote random_sine_note(float bubble1, float bubble2) {
+
+    float bubbleSizeMin = mapf(bubble1, 0.0f, 100.0f, 10.0f, 100.0f);
+    float bubbleSizeMax = mapf(bubble2, 0.0f, 100.0f, 10.0f, 100.0f);
+
+    float r = frand();
+
+    SineNote n;
+
+    // sustain
+    n.sustain = mapf(
+        r, 0.0f, 1.0f,
+        1.0f / bubbleSizeMax,
+        fminf(1.0f / bubbleSizeMin, 0.08f)
+    ) * 1.1f;
+
+    // freq
+    n.freq = mapf(
+        sqrtf(r), 0.0f, 1.0f,
+        bubbleSizeMax * bubbleSizeMax,
+        bubbleSizeMin * bubbleSizeMin
+    );
+
+    // accelerate
+    n.accelerate = mapf(
+        r, 0.0f, 1.0f,
+        sqrtf(304.0f / bubbleSizeMax),
+        sqrtf(304.0f / bubbleSizeMin)
+    );
+
+    // amp
+    n.amp = 1.0f;
+    n.amp *= mapf(r * r, 0.0f, 1.0f, 0.1f, 1.0f);
+    n.amp *= mapf(frand() * frand(), 0.0f, 1.0f, 0.0f, 1.0f);
+
+    // envelope
+    n.attack_samples  = (uint32_t)(0.01f * n.sustain * SAMPLE_RATE);
+    n.release_samples = (uint32_t)(0.6f  * n.sustain * SAMPLE_RATE);
+    n.note_total_samples = n.attack_samples + n.release_samples;
+
+    // frequency ramp
+    float ramp_time = (n.sustain > 0.5f) ? n.sustain : 0.5f;
+    n.freq_ramp_samples = (uint32_t)(ramp_time * SAMPLE_RATE);
+
+    n.phase_step_start =
+        (uint32_t)((float)TABLE_SIZE * n.freq
+                   / SAMPLE_RATE * (1 << 16));
+
+    n.phase_step_end =
+        (uint32_t)((float)TABLE_SIZE *
+                   (n.freq * (1.0f + n.accelerate))
+                   / SAMPLE_RATE * (1 << 16));
+
+    return n;
+}
+
+// =====================================================
+// Start new note (SC: Synth.new)
+// =====================================================
+static void start_new_note(void) {
+    current_note = random_sine_note(10.0f, 73.0f); // ← 任意
+    note_sample_pos = 0;
+    note_on = true;
+}
+
+// =====================================================
 // Audio init
-// =====================
+// =====================================================
 static struct audio_buffer_pool *init_audio(void) {
     static audio_format_t audio_format = {
         .format = AUDIO_BUFFER_FORMAT_PCM_S16,
@@ -69,10 +152,7 @@ static struct audio_buffer_pool *init_audio(void) {
         .pio_sm = 0,
     };
 
-    const struct audio_format *output_format =
-        audio_i2s_setup(&audio_format, &config);
-
-    if (!output_format) {
+    if (!audio_i2s_setup(&audio_format, &config)) {
         panic("I2S setup failed");
     }
 
@@ -82,18 +162,19 @@ static struct audio_buffer_pool *init_audio(void) {
     return pool;
 }
 
-// =====================
+// =====================================================
 // Main
-// =====================
+// =====================================================
 int main() {
     stdio_init_all();
+    srand(time_us_32());
 
-    // ---- DAC unmute ----
+    // DAC unmute
     gpio_init(PICO_AUDIO_PACK_MUTE_PIN);
     gpio_set_dir(PICO_AUDIO_PACK_MUTE_PIN, GPIO_OUT);
     gpio_put(PICO_AUDIO_PACK_MUTE_PIN, 0);
 
-    // ---- sine table ----
+    // sine table
     for (int i = 0; i < TABLE_SIZE; i++) {
         sine_table[i] = (int16_t)(
             32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.05f
@@ -101,20 +182,7 @@ int main() {
     }
 
     struct audio_buffer_pool *ap = init_audio();
-
-    uint32_t phase = 0;
-
-    uint32_t phase_step_start =
-        (uint32_t)((float)TABLE_SIZE * BASE_FREQ
-                   / SAMPLE_RATE * (1 << 16));
-
-    uint32_t phase_step_end =
-        (uint32_t)((float)TABLE_SIZE *
-                   (BASE_FREQ * (1.0f + ACCELERATE))
-                   / SAMPLE_RATE * (1 << 16));
-
-    uint32_t gate_counter = 0;
-    bool note_on = true;
+    start_new_note();
 
     while (true) {
         struct audio_buffer *buffer = take_audio_buffer(ap, true);
@@ -122,45 +190,50 @@ int main() {
 
         for (uint i = 0; i < buffer->max_sample_count; i++) {
 
-            float env = 0.0f;
-
             if (note_on) {
 
                 // ===== Env.linen =====
-                if (note_sample_pos < ATTACK_SAMPLES) {
-                    float x = (float)note_sample_pos / ATTACK_SAMPLES;
-                    env = x * x;            // curve ≈ -3
+                float env;
+                if (note_sample_pos < current_note.attack_samples) {
+                    float x = (float)note_sample_pos
+                              / current_note.attack_samples;
+                    env = x * x;
                 }
-                else if (note_sample_pos < NOTE_TOTAL_SAMPLES) {
+                else if (note_sample_pos <
+                         current_note.note_total_samples) {
                     float x = 1.0f -
-                        (float)(note_sample_pos - ATTACK_SAMPLES)
-                        / RELEASE_SAMPLES;
+                        (float)(note_sample_pos -
+                        current_note.attack_samples)
+                        / current_note.release_samples;
                     env = x * x;
                 }
                 else {
-                    // note end
                     note_on = false;
                     note_sample_pos = 0;
-                    gate_counter = 0;
                     samples[i] = 0;
                     continue;
                 }
 
                 // ===== accelerate (Line.kr) =====
                 uint32_t ramp_pos =
-                    (note_sample_pos < FREQ_RAMP_SAMPLES)
+                    (note_sample_pos < current_note.freq_ramp_samples)
                         ? note_sample_pos
-                        : FREQ_RAMP_SAMPLES;
+                        : current_note.freq_ramp_samples;
 
-                float t = (float)ramp_pos / FREQ_RAMP_SAMPLES;
+                float t = (float)ramp_pos
+                          / current_note.freq_ramp_samples;
 
                 uint32_t phase_step =
-                    phase_step_start +
-                    (uint32_t)((phase_step_end - phase_step_start) * t);
+                    current_note.phase_step_start +
+                    (uint32_t)(
+                        (current_note.phase_step_end -
+                         current_note.phase_step_start) * t
+                    );
 
-                int16_t s = sine_table[(phase >> 16) % TABLE_SIZE];
-                samples[i] = (int16_t)(s * env);
+                int16_t s =
+                    sine_table[(phase >> 16) % TABLE_SIZE];
 
+                samples[i] = (int16_t)(s * env * current_note.amp);
                 phase += phase_step;
                 note_sample_pos++;
             }
@@ -170,8 +243,7 @@ int main() {
 
                 if (gate_counter >= NOTE_OFF_SAMPLES) {
                     gate_counter = 0;
-                    note_on = true;
-                    note_sample_pos = 0;
+                    start_new_note();
                 }
             }
         }
