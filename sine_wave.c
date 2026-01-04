@@ -17,6 +17,19 @@
 #define NOTE_OFF_MAX_SEC 0.005f
 
 // =====================================================
+// Reverb settings (lightweight FB delay)
+// =====================================================
+#define REVERB_DELAY_SEC   0.05f
+#define REVERB_SEND        0.35f
+#define REVERB_FEEDBACK    0.6f
+
+#define REVERB_DELAY_SAMPLES \
+    ((uint32_t)(REVERB_DELAY_SEC * SAMPLE_RATE))
+
+static float reverb_buffer[REVERB_DELAY_SAMPLES];
+static uint32_t reverb_idx = 0;
+
+// =====================================================
 // Utility
 // =====================================================
 static inline float frand(void) {
@@ -29,6 +42,24 @@ static inline float mapf(
 ) {
     return (v - in_min) / (in_max - in_min)
         * (out_max - out_min) + out_min;
+}
+
+// =====================================================
+// Simple reverb
+// =====================================================
+static inline float apply_reverb(float input) {
+    float delayed = reverb_buffer[reverb_idx];
+
+    float out = input + delayed;
+
+    reverb_buffer[reverb_idx] =
+        input * REVERB_SEND + delayed * REVERB_FEEDBACK;
+
+    reverb_idx++;
+    if (reverb_idx >= REVERB_DELAY_SAMPLES)
+        reverb_idx = 0;
+
+    return out;
 }
 
 // =====================================================
@@ -60,7 +91,7 @@ static bool note_on = false;
 static uint32_t phase = 0;
 
 // =====================================================
-// Random parameter generator (TS/C++ 移植)
+// Random parameter generator
 // =====================================================
 static SineNote random_sine_note(float bubble1, float bubble2) {
 
@@ -68,7 +99,6 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
     float bubbleSizeMax = mapf(bubble2, 0.0f, 100.0f, 10.0f, 100.0f);
 
     float r = frand();
-
     SineNote n;
 
     // sustain
@@ -119,16 +149,12 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
 }
 
 // =====================================================
-// Start new note (SC: Synth.new)
-// =====================================================
 static void start_new_note(void) {
-    current_note = random_sine_note(10.0f, 73.0f); // ← 任意
+    current_note = random_sine_note(10.0f, 73.0f);
     note_sample_pos = 0;
     note_on = true;
 }
 
-// =====================================================
-// Audio init
 // =====================================================
 static struct audio_buffer_pool *init_audio(void) {
     static audio_format_t audio_format = {
@@ -169,12 +195,10 @@ int main() {
     stdio_init_all();
     srand(time_us_32());
 
-    // DAC unmute
     gpio_init(PICO_AUDIO_PACK_MUTE_PIN);
     gpio_set_dir(PICO_AUDIO_PACK_MUTE_PIN, GPIO_OUT);
     gpio_put(PICO_AUDIO_PACK_MUTE_PIN, 0);
 
-    // sine table
     for (int i = 0; i < TABLE_SIZE; i++) {
         sine_table[i] = (int16_t)(
             32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.05f
@@ -190,10 +214,11 @@ int main() {
 
         for (uint i = 0; i < buffer->max_sample_count; i++) {
 
-            if (note_on) {
+            float out = 0.0f;
 
-                // ===== Env.linen =====
+            if (note_on) {
                 float env;
+
                 if (note_sample_pos < current_note.attack_samples) {
                     float x = (float)note_sample_pos
                               / current_note.attack_samples;
@@ -210,11 +235,9 @@ int main() {
                 else {
                     note_on = false;
                     note_sample_pos = 0;
-                    samples[i] = 0;
                     continue;
                 }
 
-                // ===== accelerate (Line.kr) =====
                 uint32_t ramp_pos =
                     (note_sample_pos < current_note.freq_ramp_samples)
                         ? note_sample_pos
@@ -230,29 +253,39 @@ int main() {
                          current_note.phase_step_start) * t
                     );
 
-                int16_t s =
-                    sine_table[(phase >> 16) % TABLE_SIZE];
+                float s =
+                    sine_table[(phase >> 16) % TABLE_SIZE] / 32768.0f;
 
-                samples[i] = (int16_t)(s * env * current_note.amp);
+                out = s * env * current_note.amp;
                 phase += phase_step;
                 note_sample_pos++;
             }
             else {
-                samples[i] = 0;
                 gate_counter++;
 
-                uint32_t off_samples = mapf(
-                    frand(),
-                    0.0f, 1.0f,
-                    NOTE_OFF_MIN_SEC,
-                    NOTE_OFF_MAX_SEC
-                ) * SAMPLE_RATE;
+                uint32_t off_samples = (uint32_t)(
+                    mapf(
+                        frand(),
+                        0.0f, 1.0f,
+                        NOTE_OFF_MIN_SEC,
+                        NOTE_OFF_MAX_SEC
+                    ) * SAMPLE_RATE
+                );
 
                 if (gate_counter >= off_samples) {
                     gate_counter = 0;
                     start_new_note();
                 }
             }
+
+            // ===== Reverb =====
+            out = apply_reverb(out);
+
+            // clip
+            if (out > 1.0f) out = 1.0f;
+            if (out < -1.0f) out = -1.0f;
+
+            samples[i] = (int16_t)(out * 32767.0f);
         }
 
         buffer->sample_count = buffer->max_sample_count;
