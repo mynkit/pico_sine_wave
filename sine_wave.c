@@ -13,8 +13,8 @@
 #define PICO_AUDIO_PACK_MUTE_PIN 21
 
 // silence between notes
-#define NOTE_OFF_SEC 0.5f
-#define NOTE_OFF_SAMPLES ((uint32_t)(NOTE_OFF_SEC * SAMPLE_RATE))
+#define NOTE_OFF_MIN_SEC 0.001f
+#define NOTE_OFF_MAX_SEC 0.005f
 
 // =====================================================
 // Utility
@@ -241,7 +241,14 @@ int main() {
                 samples[i] = 0;
                 gate_counter++;
 
-                if (gate_counter >= NOTE_OFF_SAMPLES) {
+                uint32_t off_samples = mapf(
+                    frand(),
+                    0.0f, 1.0f,
+                    NOTE_OFF_MIN_SEC,
+                    NOTE_OFF_MAX_SEC
+                ) * SAMPLE_RATE;
+
+                if (gate_counter >= off_samples) {
                     gate_counter = 0;
                     start_new_note();
                 }
