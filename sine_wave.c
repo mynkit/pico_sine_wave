@@ -7,7 +7,7 @@
 // =====================================================
 // Audio basic settings
 // =====================================================
-#define SAMPLE_RATE 48000
+#define SAMPLE_RATE 24000
 #define TABLE_SIZE  256
 #define SAMPLES_PER_BUFFER 256
 #define PICO_AUDIO_PACK_MUTE_PIN 21
@@ -33,7 +33,7 @@
 #define ALLPASS2_DELAY 83
 
 #define ALLPASS_GAIN 0.7f
-#define REVERB_MIX 0.0f   // wet量（好みで調整）
+#define REVERB_MIX 0.03f   // wet量（好みで調整）
 
 // =====================================================
 // Utility
@@ -169,7 +169,9 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
         sqrtf(304.0f / bubbleSizeMin)
     );
 
-    n.amp = mapf(r * r, 0.0f, 1.0f, 0.1f, 1.0f);
+    n.amp = 1.0f;
+    n.amp *= mapf(r * r, 0.0f, 1.0f, 0.1f, 1.0f);
+    n.amp *= mapf(frand() * frand(), 0.0f, 1.0f, 0.0f, 1.0f);
 
     n.attack_samples  = (uint32_t)(0.01f * n.sustain * SAMPLE_RATE);
     n.release_samples = (uint32_t)(0.6f  * n.sustain * SAMPLE_RATE);
@@ -179,11 +181,13 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
     n.freq_ramp_samples = (uint32_t)(ramp_time * SAMPLE_RATE);
 
     n.phase_step_start =
-        (uint32_t)((float)TABLE_SIZE * n.freq / SAMPLE_RATE * (1 << 16));
+        (uint32_t)((float)TABLE_SIZE * n.freq
+                   / SAMPLE_RATE * (1 << 16));
 
     n.phase_step_end =
         (uint32_t)((float)TABLE_SIZE *
-        (n.freq * (1.0f + n.accelerate)) / SAMPLE_RATE * (1 << 16));
+                   (n.freq * (1.0f + n.accelerate))
+                   / SAMPLE_RATE * (1 << 16));
 
     return n;
 }
@@ -241,8 +245,9 @@ int main() {
     gpio_put(PICO_AUDIO_PACK_MUTE_PIN, 0);
 
     for (int i = 0; i < TABLE_SIZE; i++) {
-        sine_table[i] =
-            (int16_t)(32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE)) * 0.05f;
+        sine_table[i] = (int16_t)(
+            32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.05f
+        );
     }
 
     init_reverb();
