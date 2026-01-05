@@ -13,21 +13,27 @@
 #define PICO_AUDIO_PACK_MUTE_PIN 21
 
 // silence between notes
-#define NOTE_OFF_MIN_SEC 0.001f
-#define NOTE_OFF_MAX_SEC 0.005f
+#define NOTE_OFF_MIN_SEC 0.01f
+#define NOTE_OFF_MAX_SEC 0.2f
 
 // =====================================================
-// Reverb settings (lightweight FB delay)
+// Schroeder Reverb parameters
 // =====================================================
-#define REVERB_DELAY_SEC   0.05f
-#define REVERB_SEND        0.35f
-#define REVERB_FEEDBACK    0.6f
+#define COMB1_DELAY 1913
+#define COMB2_DELAY 1733
+#define COMB3_DELAY 1597
+#define COMB4_DELAY 1447
 
-#define REVERB_DELAY_SAMPLES \
-    ((uint32_t)(REVERB_DELAY_SEC * SAMPLE_RATE))
+#define COMB1_GAIN 0.871402f
+#define COMB2_GAIN 0.882762f
+#define COMB3_GAIN 0.891443f
+#define COMB4_GAIN 0.901117f
 
-static float reverb_buffer[REVERB_DELAY_SAMPLES];
-static uint32_t reverb_idx = 0;
+#define ALLPASS1_DELAY 241
+#define ALLPASS2_DELAY 83
+
+#define ALLPASS_GAIN 0.7f
+#define REVERB_MIX 0.0f   // wet量（好みで調整）
 
 // =====================================================
 // Utility
@@ -45,25 +51,7 @@ static inline float mapf(
 }
 
 // =====================================================
-// Simple reverb
-// =====================================================
-static inline float apply_reverb(float input) {
-    float delayed = reverb_buffer[reverb_idx];
-
-    float out = input + delayed;
-
-    reverb_buffer[reverb_idx] =
-        input * REVERB_SEND + delayed * REVERB_FEEDBACK;
-
-    reverb_idx++;
-    if (reverb_idx >= REVERB_DELAY_SAMPLES)
-        reverb_idx = 0;
-
-    return out;
-}
-
-// =====================================================
-// Note structure (SC Synth 相当)
+// Note structure
 // =====================================================
 typedef struct {
     float amp;
@@ -82,6 +70,23 @@ typedef struct {
 } SineNote;
 
 // =====================================================
+// Reverb structures
+// =====================================================
+typedef struct {
+    float *buffer;
+    uint32_t size;
+    uint32_t index;
+    float feedback;
+} CombFilter;
+
+typedef struct {
+    float *buffer;
+    uint32_t size;
+    uint32_t index;
+    float gain;
+} AllpassFilter;
+
+// =====================================================
 static int16_t sine_table[TABLE_SIZE];
 
 static SineNote current_note;
@@ -91,7 +96,52 @@ static bool note_on = false;
 static uint32_t phase = 0;
 
 // =====================================================
-// Random parameter generator
+// Reverb buffers
+// =====================================================
+static float comb1_buf[COMB1_DELAY];
+static float comb2_buf[COMB2_DELAY];
+static float comb3_buf[COMB3_DELAY];
+static float comb4_buf[COMB4_DELAY];
+
+static float allpass1_buf[ALLPASS1_DELAY];
+static float allpass2_buf[ALLPASS2_DELAY];
+
+static CombFilter combs[4];
+static AllpassFilter allpasses[2];
+
+// =====================================================
+// Reverb init
+// =====================================================
+static void init_reverb(void) {
+    combs[0] = (CombFilter){comb1_buf, COMB1_DELAY, 0, COMB1_GAIN};
+    combs[1] = (CombFilter){comb2_buf, COMB2_DELAY, 0, COMB2_GAIN};
+    combs[2] = (CombFilter){comb3_buf, COMB3_DELAY, 0, COMB3_GAIN};
+    combs[3] = (CombFilter){comb4_buf, COMB4_DELAY, 0, COMB4_GAIN};
+
+    allpasses[0] = (AllpassFilter){allpass1_buf, ALLPASS1_DELAY, 0, ALLPASS_GAIN};
+    allpasses[1] = (AllpassFilter){allpass2_buf, ALLPASS2_DELAY, 0, ALLPASS_GAIN};
+}
+
+// =====================================================
+// Reverb processing
+// =====================================================
+static inline float comb_process(CombFilter *c, float input) {
+    float y = c->buffer[c->index];
+    c->buffer[c->index] = input + y * c->feedback;
+    c->index = (c->index + 1) % c->size;
+    return y;
+}
+
+static inline float allpass_process(AllpassFilter *a, float input) {
+    float buf = a->buffer[a->index];
+    float y = -input + buf;
+    a->buffer[a->index] = input + buf * a->gain;
+    a->index = (a->index + 1) % a->size;
+    return y;
+}
+
+// =====================================================
+// Random note generator
 // =====================================================
 static SineNote random_sine_note(float bubble1, float bubble2) {
 
@@ -101,49 +151,39 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
     float r = frand();
     SineNote n;
 
-    // sustain
     n.sustain = mapf(
         r, 0.0f, 1.0f,
         1.0f / bubbleSizeMax,
         fminf(1.0f / bubbleSizeMin, 0.08f)
     ) * 1.1f;
 
-    // freq
     n.freq = mapf(
         sqrtf(r), 0.0f, 1.0f,
         bubbleSizeMax * bubbleSizeMax,
         bubbleSizeMin * bubbleSizeMin
     );
 
-    // accelerate
     n.accelerate = mapf(
         r, 0.0f, 1.0f,
         sqrtf(304.0f / bubbleSizeMax),
         sqrtf(304.0f / bubbleSizeMin)
     );
 
-    // amp
-    n.amp = 1.0f;
-    n.amp *= mapf(r * r, 0.0f, 1.0f, 0.1f, 1.0f);
-    n.amp *= mapf(frand() * frand(), 0.0f, 1.0f, 0.0f, 1.0f);
+    n.amp = mapf(r * r, 0.0f, 1.0f, 0.1f, 1.0f);
 
-    // envelope
     n.attack_samples  = (uint32_t)(0.01f * n.sustain * SAMPLE_RATE);
     n.release_samples = (uint32_t)(0.6f  * n.sustain * SAMPLE_RATE);
     n.note_total_samples = n.attack_samples + n.release_samples;
 
-    // frequency ramp
     float ramp_time = (n.sustain > 0.5f) ? n.sustain : 0.5f;
     n.freq_ramp_samples = (uint32_t)(ramp_time * SAMPLE_RATE);
 
     n.phase_step_start =
-        (uint32_t)((float)TABLE_SIZE * n.freq
-                   / SAMPLE_RATE * (1 << 16));
+        (uint32_t)((float)TABLE_SIZE * n.freq / SAMPLE_RATE * (1 << 16));
 
     n.phase_step_end =
         (uint32_t)((float)TABLE_SIZE *
-                   (n.freq * (1.0f + n.accelerate))
-                   / SAMPLE_RATE * (1 << 16));
+        (n.freq * (1.0f + n.accelerate)) / SAMPLE_RATE * (1 << 16));
 
     return n;
 }
@@ -155,6 +195,8 @@ static void start_new_note(void) {
     note_on = true;
 }
 
+// =====================================================
+// Audio init
 // =====================================================
 static struct audio_buffer_pool *init_audio(void) {
     static audio_format_t audio_format = {
@@ -184,7 +226,6 @@ static struct audio_buffer_pool *init_audio(void) {
 
     audio_i2s_connect(pool);
     audio_i2s_set_enabled(true);
-
     return pool;
 }
 
@@ -200,10 +241,11 @@ int main() {
     gpio_put(PICO_AUDIO_PACK_MUTE_PIN, 0);
 
     for (int i = 0; i < TABLE_SIZE; i++) {
-        sine_table[i] = (int16_t)(
-            32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.05f
-        );
+        sine_table[i] =
+            (int16_t)(32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE)) * 0.05f;
     }
+
+    init_reverb();
 
     struct audio_buffer_pool *ap = init_audio();
     start_new_note();
@@ -214,27 +256,22 @@ int main() {
 
         for (uint i = 0; i < buffer->max_sample_count; i++) {
 
-            float out = 0.0f;
+            float dry = 0.0f;
 
             if (note_on) {
                 float env;
-
                 if (note_sample_pos < current_note.attack_samples) {
-                    float x = (float)note_sample_pos
-                              / current_note.attack_samples;
+                    float x = (float)note_sample_pos / current_note.attack_samples;
                     env = x * x;
-                }
-                else if (note_sample_pos <
-                         current_note.note_total_samples) {
+                } else if (note_sample_pos < current_note.note_total_samples) {
                     float x = 1.0f -
-                        (float)(note_sample_pos -
-                        current_note.attack_samples)
+                        (float)(note_sample_pos - current_note.attack_samples)
                         / current_note.release_samples;
                     env = x * x;
-                }
-                else {
+                } else {
                     note_on = false;
                     note_sample_pos = 0;
+                    samples[i] = 0;
                     continue;
                 }
 
@@ -243,8 +280,7 @@ int main() {
                         ? note_sample_pos
                         : current_note.freq_ramp_samples;
 
-                float t = (float)ramp_pos
-                          / current_note.freq_ramp_samples;
+                float t = (float)ramp_pos / current_note.freq_ramp_samples;
 
                 uint32_t phase_step =
                     current_note.phase_step_start +
@@ -253,24 +289,16 @@ int main() {
                          current_note.phase_step_start) * t
                     );
 
-                float s =
-                    sine_table[(phase >> 16) % TABLE_SIZE] / 32768.0f;
+                int16_t s = sine_table[(phase >> 16) % TABLE_SIZE];
+                dry = (float)s * env * current_note.amp / 32768.0f;
 
-                out = s * env * current_note.amp;
                 phase += phase_step;
                 note_sample_pos++;
-            }
-            else {
+            } else {
                 gate_counter++;
-
-                uint32_t off_samples = (uint32_t)(
-                    mapf(
-                        frand(),
-                        0.0f, 1.0f,
-                        NOTE_OFF_MIN_SEC,
-                        NOTE_OFF_MAX_SEC
-                    ) * SAMPLE_RATE
-                );
+                uint32_t off_samples =
+                    mapf(frand(), 0.0f, 1.0f,
+                         NOTE_OFF_MIN_SEC, NOTE_OFF_MAX_SEC) * SAMPLE_RATE;
 
                 if (gate_counter >= off_samples) {
                     gate_counter = 0;
@@ -278,10 +306,18 @@ int main() {
                 }
             }
 
-            // ===== Reverb =====
-            out = apply_reverb(out);
+            float comb_sum = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                comb_sum += comb_process(&combs[k], dry);
+            }
+            comb_sum *= 0.25f;
 
-            // clip
+            float wet = comb_sum;
+            wet = allpass_process(&allpasses[0], wet);
+            wet = allpass_process(&allpasses[1], wet);
+
+            float out = dry * (1.0f - REVERB_MIX) + wet * REVERB_MIX;
+
             if (out > 1.0f) out = 1.0f;
             if (out < -1.0f) out = -1.0f;
 
