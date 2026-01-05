@@ -13,8 +13,8 @@
 #define PICO_AUDIO_PACK_MUTE_PIN 21
 
 // silence between notes
-#define NOTE_OFF_MIN_SEC 0.001f
-#define NOTE_OFF_MAX_SEC 0.005f
+#define NOTE_OFF_MIN_SEC 0.01f
+#define NOTE_OFF_MAX_SEC 0.2f
 
 // =====================================================
 // Utility
