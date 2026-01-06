@@ -14,8 +14,8 @@
 #define PICO_AUDIO_PACK_MUTE_PIN 21
 
 // silence between notes
-#define NOTE_OFF_MIN_SEC 0.01f
-#define NOTE_OFF_MAX_SEC 0.05f
+#define NOTE_OFF_MIN_SEC 0.001f
+#define NOTE_OFF_MAX_SEC 0.005f
 
 // =====================================================
 // Random (ADC seed + xorshift)
@@ -143,7 +143,15 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
 
 // =====================================================
 static void start_new_note(void) {
-    current_note = random_sine_note(8.0f, 61.0f);
+    float r = frand();
+    if (r > 0.1) {
+        current_note = random_sine_note(10.0f, 70.0f);
+    } else if (r > 0.09) {
+        current_note = random_sine_note(45.0f, 100.0f);
+        current_note.amp *= 0.5;
+    } else {
+        current_note = random_sine_note(4.0f, 41.0f);
+    }
     note_sample_pos = 0;
     note_on = true;
 }
