@@ -58,6 +58,7 @@ pico_enable_stdio_usb(sine_wave 0)
 # ---- libraries ----
 target_link_libraries(sine_wave
     pico_stdlib
+    hardware_adc
 )
 
 # ---- I2S only if available ----
