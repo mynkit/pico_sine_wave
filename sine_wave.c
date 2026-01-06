@@ -14,8 +14,8 @@
 #define PICO_AUDIO_PACK_MUTE_PIN 21
 
 // silence between notes
-#define NOTE_OFF_MIN_SEC 0.001f
-#define NOTE_OFF_MAX_SEC 0.005f
+#define NOTE_OFF_MIN_SEC 0.0001f
+#define NOTE_OFF_MAX_SEC 0.0005f
 
 // =====================================================
 // Random (ADC seed + xorshift)
@@ -106,7 +106,7 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
         r, 0.0f, 1.0f,
         1.0f / bubbleSizeMax,
         fminf(1.0f / bubbleSizeMin, 0.08f)
-    ) * 1.1f;
+    ) * 1.4f;
 
     n.freq = mapf(
         sqrtf(r), 0.0f, 1.0f,
@@ -144,13 +144,14 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
 // =====================================================
 static void start_new_note(void) {
     float r = frand();
-    if (r > 0.15) {
-        current_note = random_sine_note(10.0f, 70.0f);
-    } else if (r > 0.13) {
+    if (r > 0.8) {
+        current_note = random_sine_note(10.0f, 60.0f);
+        current_note.amp *= 0.7;
+    } else if (r > 0.78) {
         current_note = random_sine_note(45.0f, 100.0f);
-        current_note.amp *= 0.5;
+        current_note.amp *= 0.2;
     } else {
-        current_note = random_sine_note(4.0f, 41.0f);
+        current_note = random_sine_note(4.0f, 30.0f);
         current_note.amp *= 1.5;
     }
     note_sample_pos = 0;
@@ -205,7 +206,7 @@ int main() {
 
     for (int i = 0; i < TABLE_SIZE; i++) {
         sine_table[i] = (int16_t)(
-            32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.05f
+            32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.02f
         );
     }
 
