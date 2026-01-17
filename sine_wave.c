@@ -18,7 +18,7 @@
 #define NOTE_OFF_MAX_SEC 0.0005f
 
 // volume
-#define MASTER_VOLUME 10.0
+#define MASTER_VOLUME 1.0f
 
 // =====================================================
 // Random (ADC seed + xorshift)
@@ -148,15 +148,16 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
 static void start_new_note(void) {
     float r = frand();
     if (r > 0.8) {
-        current_note = random_sine_note(15.0f, 65.0f);
+        current_note = random_sine_note(11.0f, 65.0f);
         current_note.amp *= 1.0;
-    } else if (r > 0.11) {
+        current_note.sustain *= 1.3;
+    } else if (r > 0.2) {
         current_note = random_sine_note(45.0f, 100.0f);
         current_note.amp *= 0.2;
     } else {
-        current_note = random_sine_note(4.0f, 35.0f);
-        current_note.amp *= 0.8;
-        current_note.sustain *= 2.0;
+        current_note = random_sine_note(4.0f, 20.0f);
+        current_note.amp *= 0.55;
+        current_note.sustain *= 2.5;
     }
     note_sample_pos = 0;
     note_on = true;
@@ -210,7 +211,7 @@ int main() {
 
     for (int i = 0; i < TABLE_SIZE; i++) {
         sine_table[i] = (int16_t)(
-            32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.01f * MASTER_VOLUME
+            32767.0f * sinf(2.0f * M_PI * i / TABLE_SIZE) * 0.1f * MASTER_VOLUME
         );
     }
 
