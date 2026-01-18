@@ -151,7 +151,7 @@ static SineNote random_sine_note(float bubble1, float bubble2) {
 static void start_new_note(void) {
     float r = frand();
     if (r > 0.8) {
-        current_note = random_sine_note(11.0f, 65.0f);
+        current_note = random_sine_note(11.0f, 60.0f);
         current_note.amp *= 1.0;
         current_note.sustain *= 1.3;
     } else if (r > 0.2) {
