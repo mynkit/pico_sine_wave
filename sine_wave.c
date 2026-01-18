@@ -12,6 +12,9 @@
 #define TABLE_SIZE  256
 #define SAMPLES_PER_BUFFER 256
 #define PICO_AUDIO_PACK_MUTE_PIN 21
+#define PICO_ADC0_PIN 26
+#define PICO_ADC1_PIN 27
+#define PICO_ADC2_PIN 28
 
 // silence between notes
 #define NOTE_OFF_MIN_SEC 0.0001f
@@ -40,7 +43,7 @@ static inline float frand(void) {
 
 static uint32_t adc_seed(void) {
     adc_init();
-    adc_gpio_init(26); // ADC0
+    adc_gpio_init(PICO_ADC0_PIN); // ADC0
     adc_select_input(0);
 
     uint32_t s = 0;
@@ -154,10 +157,14 @@ static void start_new_note(void) {
     } else if (r > 0.2) {
         current_note = random_sine_note(45.0f, 100.0f);
         current_note.amp *= 0.2;
-    } else {
-        current_note = random_sine_note(4.0f, 20.0f);
+    } else if (r > 0.05) {
+        current_note = random_sine_note(4.0f, 35.0f);
         current_note.amp *= 0.55;
         current_note.sustain *= 2.5;
+    } else {
+        current_note = random_sine_note(2.0f, 20.0f);
+        current_note.amp *= 0.4;
+        current_note.sustain *= 3.0;
     }
     note_sample_pos = 0;
     note_on = true;
