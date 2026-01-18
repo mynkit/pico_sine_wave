@@ -210,6 +210,9 @@ static struct audio_buffer_pool *init_audio(void) {
 int main() {
     stdio_init_all();
 
+    // init adc
+    adc_gpio_init(PICO_ADC2_PIN);
+
     rng_state = adc_seed() ^ time_us_32();
 
     gpio_init(PICO_AUDIO_PACK_MUTE_PIN);
@@ -232,6 +235,11 @@ int main() {
     );
 
     while (true) {
+        // adc
+        adc_select_input(2);
+        uint16_t v2 = adc_read();
+
+        // audio
         struct audio_buffer *buffer = take_audio_buffer(ap, true);
         int16_t *samples = (int16_t *)buffer->buffer->bytes;
 
