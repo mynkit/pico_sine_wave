@@ -18,7 +18,7 @@
 
 // silence between notes
 #define NOTE_OFF_MIN_SEC 0.0001f
-#define NOTE_OFF_MAX_SEC 0.0005f
+#define NOTE_OFF_MAX_SEC 0.0003f
 
 // volume
 #define MASTER_VOLUME 1.0f
@@ -154,13 +154,13 @@ static void start_new_note(void) {
         current_note = random_sine_note(11.0f, 60.0f);
         current_note.amp *= 1.0;
         current_note.sustain *= 1.3;
-    } else if (r > 0.2) {
+    } else if (r > 0.25) {
         current_note = random_sine_note(45.0f, 100.0f);
         current_note.amp *= 0.2;
     } else if (r > 0.05) {
-        current_note = random_sine_note(4.0f, 35.0f);
+        current_note = random_sine_note(5.0f, 35.0f);
         current_note.amp *= 0.55;
-        current_note.sustain *= 2.5;
+        current_note.sustain *= 2.6;
     } else {
         current_note = random_sine_note(2.0f, 20.0f);
         current_note.amp *= 0.4;
